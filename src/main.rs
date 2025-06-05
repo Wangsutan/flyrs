@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let dependencies = ["curl", "7z", "rsync"];
+    let dependencies = ["7z", "rsync"];
 
     // 检查并安装依赖
     check_and_install_dependencies(&package_managers, &dependencies)?;
