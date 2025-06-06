@@ -9,15 +9,33 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 use std::{
-    io,
+    env, io,
     process::{Command, Stdio},
 };
 
 const RIME_SYSTEM_DIR: &str = "/usr/share/rime-data";
+const DEFAULT_PACKAGE: &str = "./小鹤音形“鼠须管”for macOS.zip";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 初始化日志系统
     init_logger()?;
+
+    // 解析命令行参数
+    let args: Vec<String> = env::args().collect();
+    let package_path = match args.len() {
+        1 => {
+            info!("使用默认配置包路径: {}", DEFAULT_PACKAGE);
+            DEFAULT_PACKAGE
+        }
+        2 => {
+            info!("使用命令行指定的配置包: {}", args[1]);
+            &args[1]
+        }
+        _ => {
+            error!("用法: {} [配置包路径]", args[0]);
+            return Err("参数错误".into());
+        }
+    };
 
     info!("===== 开始安装小鹤音形输入法 =====");
     info!("时间: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
@@ -40,13 +58,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
+    let input_method_packages = ["fcitx5", "fcitx5-rime", "ibus-rime"];
     let dependencies = ["7z", "rsync"];
 
     // 检查并安装依赖
     check_and_install_dependencies(&package_managers, &dependencies)?;
 
+    // 检查输入法框架
+    check_input_method_framework(&package_managers, &input_method_packages)?;
+
     // 1. 获取配置文件
-    let config_dir = match get_config_files(Some("./小鹤音形“鼠须管”for macOS.zip")) {
+    let config_dir = match get_config_files(Some(package_path)) {
         Ok(dir) => dir,
         Err(e) => {
             error!("获取配置文件失败: {}", e);
@@ -178,6 +200,73 @@ fn check_and_install_dependencies(
     }
 
     Ok(())
+}
+
+/// 检查输入法框架是否安装
+fn check_input_method_framework(
+    package_managers: &[PackageManager],
+    packages: &[&str],
+) -> Result<(), Box<dyn Error>> {
+    info!("检查输入法框架依赖……");
+
+    // 检查是否至少安装了一个输入法框架
+    let mut framework_installed = false;
+
+    for &pkg in packages {
+        let status = Command::new("which")
+            .arg(pkg)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+
+        if status.success() {
+            info!("已安装输入法组件: {}", pkg);
+            framework_installed = true;
+        }
+    }
+
+    // 如果没有安装任何输入法框架，尝试安装
+    if !framework_installed {
+        warn!("未检测到输入法框架，默认尝试安装 fcitx5-rime...");
+
+        // 尝试安装 fcitx5-rime
+        if let Some(pm) = package_managers.iter().find(|pm| command_exists(pm.name)) {
+            let install_cmd = format!(
+                "{} && sudo {} {} {}",
+                pm.update_cmd, pm.name, pm.install_args, "fcitx5-rime"
+            );
+
+            info!("将执行以下命令安装输入法框架: {}", install_cmd);
+
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg(&install_cmd)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()?;
+
+            if status.success() {
+                info!("输入法框架安装成功");
+                return Ok(());
+            }
+        }
+
+        error!("输入法框架安装失败，请手动安装 fcitx5 或 ibus 输入法");
+        return Err("输入法框架安装失败".into());
+    }
+
+    Ok(())
+}
+
+/// 检查命令是否存在
+fn command_exists(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// 查找解压后的配置目录（支持多种策略）
