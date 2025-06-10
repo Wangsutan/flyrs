@@ -13,7 +13,10 @@ use std::{
     process::{Command, Stdio},
 };
 
+// Linux 系统配置目录
 const RIME_SYSTEM_DIR: &str = "/usr/share/rime-data";
+// macOS 鼠须管配置目录
+const MACOS_RIME_USER_DIR: &str = "~/Library/Rime";
 const DEFAULT_PACKAGE: &str = "./小鹤音形“鼠须管”for macOS.zip";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,32 +43,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("===== 开始安装小鹤音形输入法 =====");
     info!("时间: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
 
-    let package_managers = [
-        PackageManager {
-            name: "pacman",
-            update_cmd: "sudo pacman -Sy",
-            install_args: "-S --noconfirm",
-        },
-        PackageManager {
-            name: "apt",
-            update_cmd: "sudo apt update",
-            install_args: "install -y",
-        },
-        PackageManager {
-            name: "dnf",
-            update_cmd: "sudo dnf check-update",
-            install_args: "install -y",
-        },
-    ];
+    // 检测操作系统
+    let target_os = env::consts::OS;
+    info!("当前操作系统: {}", target_os);
 
-    let input_method_packages = ["fcitx5", "fcitx5-rime", "ibus-rime"];
-    let dependencies = ["7z", "rsync"];
+    // 根据操作系统选择目标目录
+    let (target_dir, is_macos) = if target_os == "macos" {
+        // 展开 ~ 为用户目录
+        let home_dir = env::var("HOME").map_err(|_| "无法获取用户目录")?;
+        let user_dir = MACOS_RIME_USER_DIR.replace('~', &home_dir);
+        (user_dir, true)
+    } else {
+        (RIME_SYSTEM_DIR.to_string(), false)
+    };
 
-    // 检查并安装依赖
-    check_and_install_dependencies(&package_managers, &dependencies)?;
+    info!("目标配置目录: {}", target_dir);
 
-    // 检查输入法框架
-    check_input_method_framework(&package_managers, &input_method_packages)?;
+    // 非 macOS 系统需要安装依赖
+    if !is_macos {
+        let package_managers = [
+            PackageManager {
+                name: "pacman",
+                update_cmd: "sudo pacman -Sy",
+                install_args: "-S --noconfirm",
+            },
+            PackageManager {
+                name: "apt",
+                update_cmd: "sudo apt update",
+                install_args: "install -y",
+            },
+            PackageManager {
+                name: "dnf",
+                update_cmd: "sudo dnf check-update",
+                install_args: "install -y",
+            },
+        ];
+
+        let input_method_packages = ["fcitx5", "fcitx5-rime", "ibus-rime"];
+        let dependencies = ["7z", "rsync"];
+
+        // 检查并安装依赖
+        check_and_install_dependencies(&package_managers, &dependencies)?;
+
+        // 检查输入法框架
+        check_input_method_framework(&package_managers, &input_method_packages)?;
+    } else {
+        info!("macOS 系统跳过依赖检查");
+    }
 
     // 1. 获取配置文件
     let config_dir = match get_config_files(Some(package_path)) {
@@ -76,17 +100,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // 2. 复制文件到系统目录 (需要 sudo)
-    info!("\n需要管理员权限来复制文件到系统目录");
-    info!("请在提示时输入您的密码");
-    if let Err(e) = copy_to_system_dir(&config_dir, RIME_SYSTEM_DIR) {
-        error!("复制配置文件失败: {}", e);
-        return Err(e);
+    // 2. 复制文件到目标目录
+    if is_macos {
+        info!("\n正在复制配置文件到用户目录: {}", target_dir);
+        copy_to_user_dir_macos(&config_dir, &target_dir)?;
+    } else {
+        info!("\n需要管理员权限来复制文件到系统目录");
+        info!("请在提示时输入您的密码");
+        copy_to_system_dir_linux(&config_dir, &target_dir)?;
     }
 
     info!("\n✅ 安装完成！请重新部署 Rime 输入法");
-    info!("在任务栏右键点击输入法图标 -> 选择【重新部署】");
-    info!("然后按 Ctrl + \\ 或 F4 切换到小鹤音形");
+    if is_macos {
+        info!("在任务栏右键点击输入法图标 -> 选择【重新部署】");
+        info!("然后按 Ctrl + \\ 或 F4 切换到小鹤音形");
+    } else {
+        info!("在输入法设置中选择重新部署");
+    }
 
     Ok(())
 }
@@ -312,17 +342,32 @@ fn get_config_from_local(
         }
     }
 
-    // 执行解压命令
     info!("开始解压文件到目录: {}", output_dir);
-    let output = Command::new("7z")
-        .env("LANG", "C.UTF-8") // 使用通用的 C.UTF-8 替代
-        .arg("x") // 解压命令
-        .arg("-y") // 假设所有问题的回答都是 yes
-        .arg(format!("-o{}", output_dir)) // 正确的 -o 参数格式
-        .arg("-bso0") // 关闭标准输出
-        .arg("-bse0") // 关闭错误输出
-        .arg(local_path)
-        .output()?;
+    // 获取操作系统类型
+    let target_os = env::consts::OS;
+    // 根据操作系统选择解压工具
+    let output;
+    if target_os == "macos" {
+        info!("使用 unzip 解压");
+        output = Command::new("unzip")
+            .arg("-o") // 覆盖已存在的文件
+            .arg("-q") // 静默模式，减少输出
+            .arg("-d")
+            .arg(output_dir) // 指定解压目录
+            .arg(local_path)
+            .output()?;
+    } else {
+        info!("使用 7z 解压");
+        output = Command::new("7z")
+            .env("LANG", "C.UTF-8") // 使用通用的 C.UTF-8 替代
+            .arg("x") // 解压命令
+            .arg("-y") // 假设所有问题的回答都是 yes
+            .arg(format!("-o{}", output_dir)) // 正确的 -o 参数格式
+            .arg("-bso0") // 关闭标准输出
+            .arg("-bse0") // 关闭错误输出
+            .arg(local_path)
+            .output()?;
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -332,8 +377,6 @@ fn get_config_from_local(
 
     // 查找配置目录
     let config_dir = find_config_directory(output_dir)?;
-
-    // rename_files_to_utf8(Path::new(&config_dir))?;
 
     info!("找到配置目录: {}", config_dir);
 
@@ -356,7 +399,7 @@ fn get_config_files(local_path: Option<&str>) -> Result<String, Box<dyn Error>> 
 }
 
 /// 复制配置文件到系统目录 (需要sudo权限)
-fn copy_to_system_dir(
+fn copy_to_system_dir_linux(
     config_dir: &str,
     rime_system_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -422,7 +465,6 @@ fn create_dir_with_sudo(dir: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_rsync_with_sudo(src: &str, dest: &str) -> Result<(), Box<dyn std::error::Error>> {
     info!("复制文件从 {} 到 {}", src, dest);
-
     // 设置正确的语言环境
     let mut cmd = Command::new("sudo");
     cmd.env("LANG", "zh_CN.UTF-8")
@@ -507,5 +549,59 @@ fn fix_permissions(rime_system_dir: &str) -> Result<(), Box<dyn std::error::Erro
     }
 
     info!("权限修复完成");
+    Ok(())
+}
+
+/// macOS 专用：复制配置文件到用户目录
+fn copy_to_user_dir_macos(
+    config_dir: &str,
+    user_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("复制配置文件到用户目录: {}", user_dir);
+
+    // 确保目标目录存在
+    fs::create_dir_all(user_dir)?;
+
+    // 创建备份目录
+    let backup_dir = format!(
+        "{}/backup-{}",
+        user_dir,
+        Local::now().format("%Y%m%d_%H%M%S")
+    );
+
+    // 备份现有配置（如果存在）
+    if Path::new(user_dir).exists() {
+        let is_empty = fs::read_dir(user_dir)?.next().is_none();
+        if !is_empty {
+            info!("备份现有配置到: {}", backup_dir);
+            fs::create_dir_all(&backup_dir)?;
+            run_copy_cmd(user_dir, &backup_dir)?;
+        }
+    }
+
+    // 复制新配置
+    info!("复制新配置文件到: {}", user_dir);
+    run_copy_cmd(config_dir, user_dir)?;
+
+    info!("✅ 配置文件已成功复制到用户目录");
+    Ok(())
+}
+
+/// 苹果系统通用复制命令（不需要 sudo）
+fn run_copy_cmd(src: &str, dest: &str) -> Result<(), Box<dyn std::error::Error>> {
+    info!("复制文件从 {} 到 {}", src, dest);
+
+    // 使用 cp 命令进行复制，使用 -R 选项来递归复制目录
+    let status = Command::new("cp")
+        .arg("-R") // 递归复制
+        .arg(src) // 源目录
+        .arg(dest) // 目标目录
+        .status()?;
+
+    if !status.success() {
+        error!("cp 复制失败");
+        return Err("文件复制失败".into());
+    }
+
     Ok(())
 }
