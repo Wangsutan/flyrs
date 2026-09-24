@@ -30,11 +30,21 @@
 
 # 使用指定路径的压缩包
 ./flyrs /path/to/your/package.zip
+
+# 指定 Rime 配置目标目录（默认 /usr/share/rime-data）
+./flyrs --target-dir /tmp/rime-test /path/to/your/package.zip
+
+# 也可以用环境变量指定目标目录
+FLYRS_RIME_DIR=/tmp/rime-test ./flyrs /path/to/your/package.zip
 ```
+
+> `--target-dir` / `FLYRS_RIME_DIR` 指向当前用户可写的目录时，程序**不会调用 sudo**，
+> 可用于非 root 自测；只有指向系统目录时才会提权。
 
 ### 3. 输入法框架处理
 
-- 程序会自动检测系统中是否已安装fcitx5、fcitx5-rime或ibus-rime
+- 程序会自动检测系统中是否已安装 Rime 框架（通过 `librime.so` 所属包，
+  如 `fcitx5-rime` / `ibus-rime`；这两个包只提供插件库，不提供同名可执行文件）
 - 如果未检测到任何输入法框架，程序会**默认安装fcitx5-rime**
 - 安装过程中需要输入管理员密码
 
@@ -44,9 +54,9 @@
 1. 初始化日志系统（日志保存在`logs/`目录）
 2. 检查并安装7z和rsync等工具
 3. 检查并安装输入法框架（默认fcitx5-rime）
-4. 解压配置文件到`./extracted`目录
+4. 解压配置文件到`./extracted`目录（自动定位含 `*.schema.yaml` 的 rime 配置层）
 5. 备份现有Rime配置（如果有）
-6. 复制新配置到系统目录`/usr/share/rime-data`
+6. 将新配置**合并**复制到目标目录（默认`/usr/share/rime-data`，不删除目标中既有文件）
 7. 设置文件权限
 
 ## 注意事项
@@ -66,7 +76,8 @@
    - 程序会在需要时提示输入密码
 
 4. **备份机制**：
-   - 现有配置会备份到`/usr/share/rime-backup-<时间戳>`
+   - 现有配置会备份到目标目录同级的`rime-backup-<时间戳>`（默认目标时即`/usr/share/rime-backup-<时间戳>`）
+   - 复制采用合并方式，不会删除目标目录中既有文件
    - 如需恢复，可手动替换回原目录
 
 5. **日志文件**：
